@@ -1,0 +1,13 @@
+{
+  "appId": "com.gymtracker.abc",
+  "appName": "GymTracker ABC",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "iconColor": "#38bdf8"
+    }
+  }
+}

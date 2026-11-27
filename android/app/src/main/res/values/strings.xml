@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">GymTracker ABC</string>
+    <string name="title_activity_main">GymTracker ABC</string>
+    <string name="package_name">com.gymtracker.abc</string>
+    <string name="custom_url_scheme">com.gymtracker.abc</string>
+</resources>

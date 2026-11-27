@@ -1,0 +1,16 @@
+{
+  "name": "gymtracker-abc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GymTracker ABC — App allenamenti Full Body A-B-C offline con Capacitor Android",
+  "scripts": {
+    "cap:sync": "npx cap sync android",
+    "cap:android": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/cli": "^8.6.3",
+    "@capacitor/core": "^8.6.3",
+    "@capacitor/local-notifications": "^8.3.1"
+  }
+}

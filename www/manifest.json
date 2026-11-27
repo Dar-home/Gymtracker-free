@@ -1,0 +1,19 @@
+{
+  "name": "GymTracker ABC",
+  "short_name": "GymTracker",
+  "description": "Tracker allenamenti Full Body A-B-C con 1RM live, RIR, timer recupero e progressioni offline.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0e16",
+  "theme_color": "#0b0f17",
+  "lang": "it",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
