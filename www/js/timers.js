@@ -12,6 +12,8 @@
   let audioCtx = null;
   let wakeLockSentinel = null;
   let nativeChannelReady = false;
+  let nativeActionListenerBound = false;
+  let lastNativeActionAtMs = 0;
   let tickerId = null;
   let alarmLoopId = null;
   let lifecycleBound = false;
@@ -44,6 +46,15 @@
         startAlarmLoop();
       }
     }
+
+    const nativePlugin = getNativeRestTimerPlugin();
+    if (nativePlugin && !nativeActionListenerBound && typeof nativePlugin.addListener === "function") {
+      nativeActionListenerBound = true;
+      try {
+        nativePlugin.addListener("restTimerAction", handleNativeRestAction);
+      } catch { /* ignorato */ }
+    }
+    syncFromNativePendingState();
 
     if (!lifecycleBound && typeof global.addEventListener === "function") {
       lifecycleBound = true;
@@ -123,7 +134,7 @@
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = "sine";
-      osc.frequency.setValueAtTime(880, t0);
+      osc.frequency.setValueAtTime(660, t0);
       gain.gain.setValueAtTime(0.001, t0);
       gain.gain.exponentialRampToValueAtTime(0.14, t0 + 0.006);
       gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.06);
@@ -141,37 +152,42 @@
       unlockAudio();
       if (audioCtx) {
         const now = audioCtx.currentTime;
-        // Sequenza acuta e squillante (E7-G7-E7-A7) con onda quadra per massima udibilità su speaker mobile
+        // Sequenza più morbida e meno acuta (D6-F6-D6-A6) con triangle + lowpass
         const pattern = [
-          { freq: 2637.02, start: 0.00, dur: 0.095 },
-          { freq: 3135.96, start: 0.115, dur: 0.095 },
-          { freq: 2637.02, start: 0.23, dur: 0.095 },
-          { freq: 3520.00, start: 0.345, dur: 0.16 }
+          { freq: 1174.66, start: 0.00, dur: 0.10 },
+          { freq: 1396.91, start: 0.12, dur: 0.10 },
+          { freq: 1174.66, start: 0.24, dur: 0.10 },
+          { freq: 1760.00, start: 0.36, dur: 0.17 }
         ];
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.setValueAtTime(2600, now);
+        filter.connect(audioCtx.destination);
+
         pattern.forEach(note => {
           const t0 = now + note.start;
           const oscMain = audioCtx.createOscillator();
           const oscSub = audioCtx.createOscillator();
           const gain = audioCtx.createGain();
 
-          oscMain.type = "square";
+          oscMain.type = "triangle";
           oscMain.frequency.setValueAtTime(note.freq, t0);
-          oscSub.type = "triangle";
-          oscSub.frequency.setValueAtTime(note.freq * 1.5, t0);
+          oscSub.type = "sine";
+          oscSub.frequency.setValueAtTime(note.freq * 0.5, t0);
 
           gain.gain.setValueAtTime(0.001, t0);
-          gain.gain.exponentialRampToValueAtTime(0.45, t0 + 0.008);
-          gain.gain.setValueAtTime(0.45, t0 + Math.max(0.015, note.dur - 0.025));
+          gain.gain.exponentialRampToValueAtTime(0.38, t0 + 0.01);
+          gain.gain.setValueAtTime(0.38, t0 + Math.max(0.02, note.dur - 0.03));
           gain.gain.exponentialRampToValueAtTime(0.001, t0 + note.dur);
 
           oscMain.connect(gain);
           oscSub.connect(gain);
-          gain.connect(audioCtx.destination);
+          gain.connect(filter);
 
           oscMain.start(t0);
           oscSub.start(t0);
-          oscMain.stop(t0 + note.dur + 0.01);
-          oscSub.stop(t0 + note.dur + 0.01);
+          oscMain.stop(t0 + note.dur + 0.015);
+          oscSub.stop(t0 + note.dur + 0.015);
         });
       }
       if (canVibrate()) {
@@ -221,10 +237,84 @@
   /* ========================================================================
      NOTIFICHE NATIVE (CAPACITOR LOCAL NOTIFICATIONS + WEB NOTIFICATION)
      ======================================================================== */
+  function getNativeRestTimerPlugin() {
+    return global.Capacitor && global.Capacitor.Plugins && global.Capacitor.Plugins.RestTimer
+      ? global.Capacitor.Plugins.RestTimer
+      : null;
+  }
+
   function getCapacitorLocalNotifications() {
     return global.Capacitor && global.Capacitor.Plugins && global.Capacitor.Plugins.LocalNotifications
       ? global.Capacitor.Plugins.LocalNotifications
       : null;
+  }
+
+  async function syncNativeCountdownStart(endTimeMs, exerciseName) {
+    const prefs = getPrefs();
+    if (!prefs.notifications) return false;
+    const nativePlugin = getNativeRestTimerPlugin();
+    if (!nativePlugin || typeof nativePlugin.startCountdown !== "function") return false;
+    try {
+      await nativePlugin.startCountdown({
+        endTimeMs: Number(endTimeMs) || 0,
+        exerciseName: String(exerciseName || "")
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function syncNativeCountdownCancel() {
+    const nativePlugin = getNativeRestTimerPlugin();
+    if (!nativePlugin || typeof nativePlugin.cancelCountdown !== "function") return;
+    try {
+      await nativePlugin.cancelCountdown();
+    } catch { /* ignorato */ }
+  }
+
+  function handleNativeRestAction(data) {
+    if (!data || !data.action) return;
+    const updatedAt = Number(data.updatedAtMs) || Date.now();
+    if (updatedAt <= lastNativeActionAtMs) return;
+    lastNativeActionAtMs = updatedAt;
+
+    const session = getActiveSession();
+    if (!session || !session.restTimer) return;
+    const rt = session.restTimer;
+
+    if (data.action === "stop" || data.action === "expired") {
+      finishRestManually(true);
+      return;
+    }
+
+    if (data.action === "adjust") {
+      const nextEndMs = Number(data.endTimeMs) || 0;
+      if (nextEndMs > Date.now()) {
+        rt.active = true;
+        rt.endTimeMs = nextEndMs;
+        rt.totalSec = Math.max(5, Math.ceil((nextEndMs - Date.now()) / 1000));
+        rt.isAlarming = false;
+        rt.alarmStartedAtMs = 0;
+        lastCountdownBeepSec = 0;
+        stopAlarmLoop();
+        persist();
+        if (ctx.onTick) ctx.onTick();
+      } else {
+        finishRestManually(true);
+      }
+    }
+  }
+
+  async function syncFromNativePendingState() {
+    const nativePlugin = getNativeRestTimerPlugin();
+    if (!nativePlugin || typeof nativePlugin.getPendingState !== "function") return;
+    try {
+      const res = await nativePlugin.getPendingState();
+      if (res && res.action) {
+        handleNativeRestAction(res);
+      }
+    } catch { /* ignorato */ }
   }
 
   async function ensureNativeNotificationReady() {
@@ -256,6 +346,10 @@
   async function scheduleRestNotification(endTimeMs, exerciseName) {
     const prefs = getPrefs();
     if (!prefs.notifications) return;
+
+    const usedNativeCountdown = await syncNativeCountdownStart(endTimeMs, exerciseName);
+    if (usedNativeCountdown) return;
+
     const ln = await ensureNativeNotificationReady();
     if (ln) {
       try {
@@ -281,6 +375,7 @@
   }
 
   async function cancelRestNotification() {
+    await syncNativeCountdownCancel();
     const ln = getCapacitorLocalNotifications();
     if (!ln) return;
     try {
@@ -421,9 +516,9 @@
     if (ctx.onTick) ctx.onTick();
   }
 
-  function finishRestManually() {
+  function finishRestManually(fromNative) {
     stopAlarmLoop();
-    cancelRestNotification();
+    if (!fromNative) cancelRestNotification();
     const session = getActiveSession();
     if (session && session.restTimer) {
       const now = Date.now();
@@ -436,9 +531,9 @@
     if (ctx.onTick) ctx.onTick();
   }
 
-  function closeRestTimer() {
+  function closeRestTimer(fromNative) {
     stopAlarmLoop();
-    cancelRestNotification();
+    if (!fromNative) cancelRestNotification();
     const session = getActiveSession();
     if (session && session.restTimer) {
       session.restTimer.active = false;
@@ -485,6 +580,7 @@
         rt.alarmStartedAtMs = Date.now();
         rt.isAlarming = true;
         persist();
+        syncNativeCountdownCancel();
         startAlarmLoop();
         showBrowserEndNotification(rt.exerciseName);
       }
@@ -500,6 +596,7 @@
     getCapacitorLocalNotifications,
     ensureNativeNotificationReady,
     cancelRestNotification,
+    syncFromNativePendingState,
     startSessionIfIdle,
     setActiveRoutineContext,
     toggleSessionPause,

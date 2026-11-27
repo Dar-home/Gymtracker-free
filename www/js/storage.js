@@ -107,11 +107,52 @@
       n.includes("stacco") || n.includes("hip thrust") || n.includes("glute");
   }
 
+  function isHeavyLegExercise(muscleGroup, name) {
+    const n = normalizeName(name);
+    return n.includes("leg press") || n.includes("pressa") || n.includes("squat") ||
+      n.includes("stacco") || n.includes("hip thrust") || n.includes("rdl") ||
+      n.includes("affond");
+  }
+
   function getExerciseWeightStep(exOrMuscle, name) {
     if (exOrMuscle && typeof exOrMuscle === "object") {
-      return isLegExercise(exOrMuscle.muscleGroup, exOrMuscle.name) ? 5 : 1;
+      return isHeavyLegExercise(exOrMuscle.muscleGroup, exOrMuscle.name) ? 10 : 5;
     }
-    return isLegExercise(exOrMuscle, name) ? 5 : 1;
+    return isHeavyLegExercise(exOrMuscle, name) ? 10 : 5;
+  }
+
+  function estimateRecommendedRestSec(ex, stimulus, isSuperset) {
+    const mg = ex && ex.muscleGroup ? ex.muscleGroup : "";
+    const name = ex && ex.name ? ex.name : "";
+    const stim = stimulus || (ex && (ex.focus || ex.stimulus)) || "Ipertrofia";
+    const isForza = stim === "Forza";
+    const isCore = stim === "Core" || mg === "Core" || (ex && ex.focus === "Core");
+    const n = normalizeName(name);
+
+    let sec = 90;
+    if (isCore || n.includes("crunch") || n.includes("plank") || n.includes("abdom")) {
+      sec = 60;
+    } else if (isHeavyLegExercise(mg, name)) {
+      sec = isForza ? 180 : 135;
+    } else if (mg === "Polpacci" || n.includes("calf") || n.includes("polpacc")) {
+      sec = isForza ? 75 : 60;
+    } else if (n.includes("leg curl") || n.includes("leg ext") || mg === "Quadricipiti" || mg === "Femorali/Glutei") {
+      sec = isForza ? 120 : 90;
+    } else if (
+      mg === "Bicipiti" || mg === "Tricipiti" ||
+      n.includes("alzate") || n.includes("butterfly") || n.includes("pec deck") || n.includes("croci") ||
+      mg === "Altro"
+    ) {
+      sec = isForza ? 90 : 75;
+    } else {
+      // Multiarticolari parte alta (Petto, Schiena, Spalle compatte)
+      sec = isForza ? 150 : 105;
+    }
+
+    if (isSuperset) {
+      sec = Math.max(90, Math.min(180, sec + 15));
+    }
+    return sec;
   }
 
   function getDefaultCatalog() {
@@ -991,7 +1032,9 @@
     roundToGymStep,
     inferMuscleGroup,
     isLegExercise,
+    isHeavyLegExercise,
     getExerciseWeightStep,
+    estimateRecommendedRestSec,
     getDefaultCatalog,
     parseCatalogText,
     buildCatalogCsv,

@@ -6,7 +6,7 @@
 
   const S = global.GymStorage;
   const T = global.GymTimers;
-  const APP_BUILD = "2026-11-27.4";
+  const APP_BUILD = "2026-11-27.5";
 
   let state = null;
   let currentTab = "train";
@@ -268,7 +268,7 @@
       focus: isForza ? "Forza" : "Ipertrofia",
       sets: isForza ? 4 : 3,
       repsTarget: isForza ? "4–6" : "8–12",
-      restSec: isForza ? (S.isLegExercise(ex && ex.muscleGroup, ex && ex.name) ? 180 : 150) : 90,
+      restSec: S.estimateRecommendedRestSec(ex, stimulus, false),
       suggestedWeight
     };
   }
@@ -622,7 +622,6 @@
     if (!validSets.length) return null;
 
     const range = parseRepsRange(ex.repsTarget, ex.focus);
-    const roundStep = getPreferredRoundingStep();
     const isForza = ex.focus === "Forza" || ex.stimulus === "Forza";
     const categoryLabel = isForza ? "Forza" : (ex.focus === "Core" ? "Core" : "Ipertrofia");
 
@@ -638,6 +637,10 @@
       };
     }
 
+    const adviceStep = S.isHeavyLegExercise(ex.muscleGroup, ex.name)
+      ? 10
+      : (topWeight >= 30 ? 5 : getPreferredRoundingStep());
+
     const useRir = Boolean(!state || !state.prefs || state.prefs.useRirInAdvice !== false);
     let bestSet1RM = 0;
     let bestSetWeight = topWeight;
@@ -647,7 +650,8 @@
       const w = S.parseNum(s.weight);
       const r = Math.round(S.parseNum(s.reps));
       const rirVal = useRir ? parseRirNumeric(s.rir) : null;
-      const effReps = r + (rirVal !== null ? rirVal : 0);
+      const rirBonus = rirVal !== null ? Math.min(2, rirVal) * 0.5 : 0;
+      const effReps = r + rirBonus;
       const orm = w <= 0 ? 0 : (effReps <= 1 ? w : w * (1 + effReps / 30));
       if (orm > bestSet1RM || (orm === bestSet1RM && w > bestSetWeight)) {
         bestSet1RM = orm;
@@ -674,21 +678,21 @@
     const rirInfo = hasRir ? ` · RIR medio ${formatDec(avgRir)}` : "";
 
     const targetReps = range.min;
-    const targetRir = hasRir ? (isForza ? 2 : 1.5) : 0;
+    const targetRir = hasRir ? (isForza ? 2 : 1) : 0;
     const idealWeight = bestSet1RM / (1 + (targetReps + targetRir) / 30);
 
-    const minInc = Math.round((topWeight + roundStep) * 100) / 100;
-    const maxInc = Math.max(minInc, S.roundToGymStep(topWeight * 1.35, roundStep));
-    const incWeight = Math.min(maxInc, Math.max(minInc, S.roundToGymStep(idealWeight, roundStep)));
+    const minInc = Math.round((topWeight + adviceStep) * 100) / 100;
+    const maxInc = Math.max(minInc, S.roundToGymStep(topWeight * 1.35, adviceStep));
+    const incWeight = Math.min(maxInc, Math.max(minInc, S.roundToGymStep(idealWeight, adviceStep)));
     const incDelta = Math.round((incWeight - topWeight) * 100) / 100;
 
-    const minDec = S.roundToGymStep(topWeight * 0.65, roundStep);
-    const maxDec = Math.max(0, Math.round((topWeight - roundStep) * 100) / 100);
-    const decWeight = Math.max(0, Math.min(maxDec, Math.max(minDec, S.roundToGymStep(idealWeight, roundStep))));
+    const minDec = S.roundToGymStep(topWeight * 0.65, adviceStep);
+    const maxDec = Math.max(0, Math.round((topWeight - adviceStep) * 100) / 100);
+    const decWeight = Math.max(0, Math.min(maxDec, Math.max(minDec, S.roundToGymStep(idealWeight, adviceStep))));
     const decDelta = Math.round((topWeight - decWeight) * 100) / 100;
 
     if (isForza) {
-      if (belowMinOnMajority || (belowMinOnAny && hasRir && avgRir <= 0.5)) {
+      if (belowMinOnMajority || (belowMinOnAny && hasRir && avgRir === 0)) {
         return {
           action: "decrease",
           categoryLabel,
@@ -698,18 +702,16 @@
           suggestedReps: range.min
         };
       }
-      const canIncreaseForza = avgReps >= range.max + 2 || (hasRir
-        ? ((hitTopOnAll && avgRir >= 1.5) || (avgReps >= range.max && avgRir >= 2))
-        : hitTopOnAll);
+      const canIncreaseForza = avgReps >= range.max + 2 || (hitTopOnAll && (!hasRir || avgRir >= 1));
       if (canIncreaseForza) {
-        const isBigJump = incDelta > roundStep;
+        const isBigJump = incDelta > adviceStep;
         return {
           action: "increase",
           categoryLabel,
           title: `📈 Aumenta a ${formatDec(incWeight)} kg (+${formatDec(incDelta)} kg)`,
           reason: isBigJump
-            ? `Con ${formatDec(bestSetWeight)} kg × ${bestSetReps} hai ampio margine${rirInfo}: passa a ${formatDec(incWeight)} kg (+${formatDec(incDelta)} kg) per lavorare su ~${targetReps} rip${hasRir ? " con RIR ~" + formatDec(targetRir) : ""}.`
-            : `Target ${range.max} rip. chiuso con margine${rirInfo}: pronto a progredire ripartendo da ${range.min} rip.`,
+            ? `Con ${formatDec(bestSetWeight)} kg × ${bestSetReps} hai ampio margine${rirInfo}: passa a ${formatDec(incWeight)} kg (+${formatDec(incDelta)} kg) per lavorare su ~${targetReps} rip${hasRir ? " con RIR ~" + targetRir : ""}.`
+            : `Target ${range.max} rip. chiuso su tutte le serie${rirInfo}: pronto a salire ripartendo da ${range.min} rip.`,
           suggestedWeight: incWeight,
           suggestedReps: range.min
         };
@@ -718,9 +720,9 @@
         action: "maintain",
         categoryLabel,
         title: `🎯 Mantieni ${formatDec(topWeight)} kg`,
-        reason: (hitTopOnAll && hasRir && avgRir < 1.5)
-          ? `Target chiuso ma margine ridotto (${rirInfo.replace(" · ", "")}): consolida velocità e tecnica prima di salire.`
-          : `Punta a chiudere tutte le serie a ${range.max} rip.${hasRir ? " con RIR 1–2" : ""} prima di aumentare${rirInfo}.`,
+        reason: (hitTopOnAll && hasRir && avgRir < 1)
+          ? `Target chiuso al limite (RIR 0): consolida velocità e tecnica prima di salire.`
+          : `Punta a chiudere tutte le serie a ${range.max} rip. prima di aumentare${rirInfo}.`,
         suggestedWeight: topWeight,
         suggestedReps: Math.min(range.max, Math.max(range.min, Math.round(avgReps)))
       };
@@ -737,17 +739,18 @@
       };
     }
 
-    const canIncreaseHyper = avgReps >= range.max + 2 || (hasRir
-      ? ((hitTopOnAll && avgRir >= 1) || (hitTopOnMajority && avgRir >= 2) || (avgReps >= range.min && avgRir >= 2.8))
-      : (hitTopOnAll || (hitTopOnMajority && minRepsDone >= range.max - 1)));
+    const canIncreaseHyper = avgReps >= range.max + 2 ||
+      hitTopOnAll ||
+      (hitTopOnMajority && minRepsDone >= range.max - 1 && (!hasRir || avgRir >= 1)) ||
+      (avgReps >= range.min && hasRir && avgRir >= 3);
     if (canIncreaseHyper) {
-      const isBigJump = incDelta > roundStep;
+      const isBigJump = incDelta > adviceStep;
       return {
         action: "increase",
         categoryLabel,
         title: `📈 Aumenta a ${formatDec(incWeight)} kg (+${formatDec(incDelta)} kg)`,
         reason: isBigJump
-          ? `Con ${formatDec(bestSetWeight)} kg × ${bestSetReps} superi il target${rirInfo}: passa a ${formatDec(incWeight)} kg (+${formatDec(incDelta)} kg) per lavorare su ~${targetReps} rip${hasRir ? " con RIR ~" + formatDec(targetRir) : ""}.`
+          ? `Con ${formatDec(bestSetWeight)} kg × ${bestSetReps} superi il target${rirInfo}: passa a ${formatDec(incWeight)} kg (+${formatDec(incDelta)} kg) per lavorare su ~${targetReps} rip${hasRir ? " con RIR ~" + targetRir : ""}.`
           : `Ottimo volume nel range${rirInfo}: sali di +${formatDec(incDelta)} kg e riparti da ${range.min} rip.`,
         suggestedWeight: incWeight,
         suggestedReps: range.min
@@ -936,6 +939,7 @@
     const primary = exList[0];
     if (!primary) return;
     const currentSec = Math.max(10, parseInt(primary.restSec, 10) || 90);
+    const recSec = S.estimateRecommendedRestSec(primary, primary.focus || primary.stimulus, exList.length > 1);
     const presets = [45, 60, 75, 90, 120, 150, 180, 240];
 
     openModal({
@@ -950,6 +954,11 @@
               ${formatRestBadge(sec)}
             </button>
           `).join("")}
+        </div>
+        <div style="margin-bottom:10px;">
+          <button type="button" id="btnUseRecommendedRest" class="btn-rest-pill" style="width:100%; justify-content:center; min-height:36px;">
+            ✨ Consigliato (${esc(exList.length > 1 ? "Superserie" : (primary.focus || "Ipertrofia"))} · ${esc(primary.muscleGroup || "Generico")}): <strong>${formatRestBadge(recSec)}</strong>
+          </button>
         </div>
         <div class="form-group" style="margin-bottom:0;">
           <label class="form-label" for="mQuickRestSec">Durata personalizzata (secondi)</label>
@@ -1005,6 +1014,13 @@
         syncPresetActive();
       });
     });
+    const recBtn = document.getElementById("btnUseRecommendedRest");
+    if (recBtn) {
+      recBtn.addEventListener("click", () => {
+        secIn.value = String(recSec);
+        syncPresetActive();
+      });
+    }
     document.getElementById("modalBody").querySelectorAll(".js-w-step").forEach(btn => {
       btn.addEventListener("click", () => {
         const delta = parseInt(btn.dataset.delta, 10) || 15;
@@ -4750,6 +4766,7 @@
 
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
+        if (T.syncFromNativePendingState) T.syncFromNativePendingState();
         T.tick();
         syncScreenWakeLock();
       }
